@@ -11,9 +11,11 @@ You need a server that isn't blocked on alldebrid for this to work. This api is 
 ## Features
 
 - ✅ Authenticates with AllDebrid on startup using API key
-- ✅ Accepts links via REST API
-- ✅ Unlocks links through AllDebrid
+- ✅ Accepts links from 80+ file hosting services via REST API
+- ✅ **Browse multi-file links** (folders, collections) before downloading
+- ✅ Unlocks links through AllDebrid with automatic filename detection
 - ✅ Streams downloads back to the client
+- ✅ Password-protected link support
 - ✅ Static token authentication for API access
 - ✅ Proper error handling and logging
 
@@ -71,7 +73,7 @@ curl -H "Authorization: Bearer your-custom-api-token" \
 ```
 
 #### `POST /download` - Download File
-Downloads a file from mega.nz through AllDebrid.
+Downloads a file from various file hosts through AllDebrid.
 
 **Request Body:**
 ```json
@@ -91,9 +93,111 @@ curl -X POST \
      http://localhost:8000/download
 ```
 
+#### `POST /browse` - Browse Multi-File Links
+Browse the contents of multi-file links (folders, archives, etc.) before downloading. Perfect for mega.nz folders, rapidgator collections, and other multi-file links.
+
+**Request Body:**
+```json
+{
+  "url": "https://mega.nz/folder/...",
+  "password": "optional-password-for-protected-links"
+}
+```
+
+**Response:**
+```json
+{
+  "url": "https://mega.nz/folder/ABC123",
+  "total_files": 5,
+  "password_protected": false,
+  "files": [
+    {
+      "filename": "video1.mp4",
+      "size": 1073741824,
+      "size_human": "1.00 GB",
+      "link": "https://redirect.alldebrid.com/...",
+      "host": "mega.nz",
+      "hostDomain": "mega.nz",
+      "supported": true
+    }
+  ]
+}
+```
+
+**Examples:**
+
+Browse a mega.nz folder:
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://mega.nz/folder/ABC123#DEF456"}' \
+     http://localhost:8000/browse
+```
+
+Browse a password-protected link:
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://rapidgator.net/folder/xyz", "password": "secret123"}' \
+     http://localhost:8000/browse
+```
+
+**Use Cases:**
+- 📂 Browse mega.nz folders before downloading specific files
+- 🔍 Preview rapidgator/1fichier collections 
+- 📋 Get file listings with sizes and metadata
+- 🔐 Handle password-protected multi-file links
+- 🎯 Select specific files from large collections
+
 ### Response
 
 The `/download` endpoint returns a streaming response with the file content. The file will be downloaded directly to your client.
+
+## Typical Workflow
+
+### Scenario: Download specific files from a mega.nz folder
+
+1. **First, browse the folder** to see what's available:
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://mega.nz/folder/ABC123#DEF456"}' \
+     http://localhost:8000/browse
+```
+
+2. **Review the response** to see all files:
+```json
+{
+  "total_files": 10,
+  "files": [
+    {
+      "filename": "movie1.mkv",
+      "size_human": "4.2 GB",
+      "link": "https://redirect.alldebrid.com/file1..."
+    },
+    {
+      "filename": "movie2.mp4", 
+      "size_human": "2.8 GB",
+      "link": "https://redirect.alldebrid.com/file2..."
+    }
+  ]
+}
+```
+
+3. **Download specific files** using their individual links:
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://redirect.alldebrid.com/file1..."}' \
+     -o movie1.mkv \
+     http://localhost:8000/download
+```
+
+This workflow is perfect for large collections where you only want specific files!
 
 ## Configuration
 

@@ -1,1 +1,4 @@
 .env
+test_api.py
+test_browse.py
+downloads/

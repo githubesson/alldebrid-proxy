@@ -95,12 +95,77 @@ class AllDebridClient:
         except Exception as e:
             logger.error(f"Error unlocking link: {str(e)}")
             raise
+    
+    async def redirector(self, link: str):
+        if not self.authenticated:
+            await self.authenticate()
+        
+        if not self.authenticated:
+            raise Exception("Not authenticated with AllDebrid")
+        
+        try:
+            form_data = aiohttp.FormData()
+            form_data.add_field('link', link)
+            
+            async with self.session.post(
+                f"{self.base_url}/link/redirector",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                data=form_data
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("status") == "success":
+                        return data["data"]
+                
+                error_text = await response.text()
+                logger.error(f"Redirector failed: {error_text}")
+                raise Exception(f"Redirector failed: {error_text}")
+        except Exception as e:
+            logger.error(f"Error in redirector: {str(e)}")
+            raise
+    
+    async def get_link_infos(self, links: list, password: str = None):
+        if not self.authenticated:
+            await self.authenticate()
+        
+        if not self.authenticated:
+            raise Exception("Not authenticated with AllDebrid")
+        
+        try:
+            form_data = aiohttp.FormData()
+            
+            for link in links:
+                form_data.add_field('link[]', link)
+            
+            if password:
+                form_data.add_field('password', password)
+            
+            async with self.session.post(
+                f"{self.base_url}/link/infos",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                data=form_data
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("status") == "success":
+                        return data["data"]
+                
+                error_text = await response.text()
+                logger.error(f"Link infos failed: {error_text}")
+                raise Exception(f"Link infos failed: {error_text}")
+        except Exception as e:
+            logger.error(f"Error getting link infos: {str(e)}")
+            raise
 
 alldebrid_client = AllDebridClient()
 
 class DownloadRequest(BaseModel):
     url: HttpUrl
     filename: Optional[str] = None
+
+class BrowseRequest(BaseModel):
+    url: HttpUrl
+    password: Optional[str] = None
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_TOKEN:
@@ -174,6 +239,89 @@ async def download_file(
     except Exception as e:
         logger.error(f"Download failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+@app.post("/browse")
+async def browse_link(
+    request: BrowseRequest,
+    token: str = Depends(verify_token)
+):
+    try:
+        logger.info(f"Processing browse request for: {request.url}")
+        
+        redirector_result = await alldebrid_client.redirector(str(request.url))
+        logger.info(f"Redirector returned: {redirector_result}")
+
+        redirected_links = []
+        if isinstance(redirector_result, dict):
+            if 'links' in redirector_result:
+                redirected_links = redirector_result['links']
+            elif 'link' in redirector_result:
+                redirected_links = [redirector_result['link']]
+            else:
+                redirected_links = [redirector_result]
+        elif isinstance(redirector_result, list):
+            redirected_links = redirector_result
+        else:
+            redirected_links = [redirector_result]
+        
+        if not redirected_links:
+            return {"error": "No links found in redirector response", "files": []}
+        
+        logger.info(f"Found {len(redirected_links)} redirected links")
+        
+        infos_result = await alldebrid_client.get_link_infos(
+            redirected_links, 
+            request.password
+        )
+        
+        logger.info(f"Infos result type: {type(infos_result)}")
+        logger.info(f"Infos result keys: {infos_result.keys() if isinstance(infos_result, dict) else 'Not a dict'}")
+        logger.info(f"Infos result sample: {str(infos_result)[:500]}...") 
+        
+        infos_list = []
+        if isinstance(infos_result, dict) and 'infos' in infos_result:
+            infos_list = infos_result['infos']
+        elif isinstance(infos_result, list):
+            infos_list = infos_result
+        
+        logger.info(f"Link infos returned: {len(infos_list)} items")
+        
+        files = []
+        for info in infos_list:
+            if isinstance(info, dict):
+                size_bytes = info.get("size", 0)
+                size_human = info.get("size_human", "")
+                if not size_human and size_bytes > 0:
+                    if size_bytes >= 1024**3:
+                        size_human = f"{size_bytes / (1024**3):.2f} GB"
+                    elif size_bytes >= 1024**2:
+                        size_human = f"{size_bytes / (1024**2):.2f} MB"
+                    elif size_bytes >= 1024:
+                        size_human = f"{size_bytes / 1024:.2f} KB"
+                    else:
+                        size_human = f"{size_bytes} B"
+                
+                file_info = {
+                    "filename": info.get("filename", "unknown"),
+                    "size": size_bytes,
+                    "size_human": size_human,
+                    "link": info.get("link", ""),
+                    "host": info.get("host", "unknown"),
+                    "hostDomain": info.get("hostDomain", "unknown"),
+                    "supported": True
+                }
+                files.append(file_info)
+        
+        return {
+            "url": str(request.url),
+            "total_files": len(files),
+            "files": files,
+            "password_protected": bool(request.password)
+        }
+        
+    except Exception as e:
+        logger.error(f"Browse failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Browse failed: {str(e)}")
 
 @app.get("/status")
 async def get_status(token: str = Depends(verify_token)):
