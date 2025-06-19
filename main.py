@@ -31,7 +31,12 @@ class AllDebridClient:
     
     async def create_session(self):
         if not self.session:
-            self.session = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(
+                total=120,
+                connect=30,
+                sock_read=60
+            )
+            self.session = aiohttp.ClientSession(timeout=timeout)
     
     async def close_session(self):
         if self.session:
@@ -195,7 +200,13 @@ async def shutdown_event():
     await alldebrid_client.close_session()
 
 async def stream_download(url: str, chunk_size: int = 8192):
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(
+        total=None,
+        connect=30,
+        sock_read=300
+    )
+    
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(url) as response:
             if response.status != 200:
                 raise HTTPException(status_code=response.status, detail="Failed to download file")
