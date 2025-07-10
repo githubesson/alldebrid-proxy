@@ -11,11 +11,13 @@ You need a server that isn't blocked on alldebrid for this to work. This api is 
 ## Features
 
 - ✅ Authenticates with AllDebrid on startup using API key
+- ✅ **Native gofile.io support** with automatic authentication
 - ✅ Accepts links from 80+ file hosting services via REST API
 - ✅ **Browse multi-file links** (folders, collections) before downloading
 - ✅ Unlocks links through AllDebrid with automatic filename detection
+- ✅ **Download resume capability** for interrupted connections
 - ✅ Streams downloads back to the client
-- ✅ Password-protected link support
+- ✅ Password-protected link support (AllDebrid & Gofile)
 - ✅ Static token authentication for API access
 - ✅ Proper error handling and logging
 
@@ -145,11 +147,53 @@ curl -X POST \
 ```
 
 **Use Cases:**
-- 📂 Browse mega.nz folders before downloading specific files
+- 📂 Browse mega.nz/gofile.io folders before downloading specific files
 - 🔍 Preview rapidgator/1fichier collections 
 - 📋 Get file listings with sizes and metadata
-- 🔐 Handle password-protected multi-file links
+- 🔐 Handle password-protected multi-file links (AllDebrid & Gofile)
 - 🎯 Select specific files from large collections
+
+## Gofile.io Support
+
+The API includes **native gofile.io support** with automatic anonymous account creation:
+
+### **Supported gofile.io features:**
+- ✅ **Direct downloads** - No AllDebrid needed for gofile links
+- ✅ **Folder browsing** - Browse gofile folders with `/browse` endpoint
+- ✅ **Password-protected content** - Handles password-protected gofile links
+- ✅ **Resume capability** - Automatic download resumption on connection drops
+- ✅ **Anonymous authentication** - Creates temporary accounts automatically
+
+### **Example gofile usage:**
+
+**Download a single gofile:**
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://gofile.io/d/ABC123"}' \
+     -o myfile.zip \
+     http://localhost:8000/download
+```
+
+**Browse a gofile folder:**
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://gofile.io/d/ABC123"}' \
+     http://localhost:8000/browse
+```
+
+**Download with password:**
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://gofile.io/d/ABC123", "password": "secret"}' \
+     -o myfile.zip \
+     http://localhost:8000/download
+```
 
 ### Response
 
@@ -198,6 +242,42 @@ curl -X POST \
 ```
 
 This workflow is perfect for large collections where you only want specific files!
+
+### Scenario: Download from gofile.io folder
+
+1. **Browse the gofile folder:**
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://gofile.io/d/ABC123"}' \
+     http://localhost:8000/browse
+```
+
+2. **Response shows files:**
+```json
+{
+  "total_files": 3,
+  "service": "gofile",
+  "files": [
+    {
+      "filename": "document.pdf",
+      "size_human": "2.1 MB",
+      "link": "https://store1.gofile.io/download/abc123/document.pdf"
+    }
+  ]
+}
+```
+
+3. **Download specific file directly:**
+```bash
+curl -X POST \
+     -H "Authorization: Bearer your-custom-api-token" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://store1.gofile.io/download/abc123/document.pdf"}' \
+     -o document.pdf \
+     http://localhost:8000/download
+```
 
 ## Configuration
 
