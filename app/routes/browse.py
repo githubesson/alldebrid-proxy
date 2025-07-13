@@ -18,52 +18,48 @@ async def browse_link(
         logger.info(f"Processing browse request for: {request.url}")
         url_str = str(request.url)
         
-        
         if "gofile.io" in url_str:
             logger.info("Detected gofile URL, using gofile client")
             
-            
-            content_id = gofile_client.parse_gofile_url(url_str)
-            
-            
-            files_list = await gofile_client.get_files_list(content_id, request.password)
-            
-            
-            files = []
-            for file_info in files_list:
-                size_bytes = file_info.get("size", 0)
-                size_human = ""
-                if size_bytes > 0:
-                    if size_bytes >= 1024**3:
-                        size_human = f"{size_bytes / (1024**3):.2f} GB"
-                    elif size_bytes >= 1024**2:
-                        size_human = f"{size_bytes / (1024**2):.2f} MB"
-                    elif size_bytes >= 1024:
-                        size_human = f"{size_bytes / 1024:.2f} KB"
-                    else:
-                        size_human = f"{size_bytes} B"
+            async with gofile_client:
+                content_id = gofile_client.parse_gofile_url(url_str)
                 
-                files.append({
-                    "filename": file_info["filename"],
-                    "size": size_bytes,
-                    "size_human": size_human,
-                    "link": file_info["link"],
-                    "host": "gofile.io",
-                    "hostDomain": "gofile.io",
-                    "supported": True,
-                    "id": file_info.get("id", "")
-                })
-            
-            return {
-                "url": url_str,
-                "total_files": len(files),
-                "files": files,
-                "password_protected": bool(request.password),
-                "service": "gofile"
-            }
+                files_list = await gofile_client.get_files_list(content_id, request.password)
+                
+                files = []
+                for file_info in files_list:
+                    size_bytes = file_info.get("size", 0)
+                    size_human = ""
+                    if size_bytes > 0:
+                        if size_bytes >= 1024**3:
+                            size_human = f"{size_bytes / (1024**3):.2f} GB"
+                        elif size_bytes >= 1024**2:
+                            size_human = f"{size_bytes / (1024**2):.2f} MB"
+                        elif size_bytes >= 1024:
+                            size_human = f"{size_bytes / 1024:.2f} KB"
+                        else:
+                            size_human = f"{size_bytes} B"
+                    
+                    files.append({
+                        "filename": file_info["filename"],
+                        "size": size_bytes,
+                        "size_human": size_human,
+                        "link": file_info["link"],
+                        "host": "gofile.io",
+                        "hostDomain": "gofile.io",
+                        "supported": True,
+                        "id": file_info.get("id", "")
+                    })
+                
+                return {
+                    "url": url_str,
+                    "total_files": len(files),
+                    "files": files,
+                    "password_protected": bool(request.password),
+                    "service": "gofile"
+                }
         
         else:
-            
             logger.info("Using AllDebrid for URL processing")
             
             redirector_result = await alldebrid_client.redirector(url_str)

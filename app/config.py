@@ -20,6 +20,6 @@ class Settings:
         self.RELOAD = os.getenv("RELOAD", "true").lower() == "true"
 
         self.CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "8192"))
-        self.MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+        self.MAX_RETRIES = int(os.getenv("MAX_RETRIES", "100"))
 
 settings = Settings() 
