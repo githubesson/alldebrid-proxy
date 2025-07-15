@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from hashlib import sha256
 from typing import Dict, Any
+import uuid
 from ..config import settings
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,8 @@ class GofileClient:
         self.token_last_updated = None
         self.token_lock = asyncio.Lock()
         self.token_refresh_task = None
+        self.active_downloads = set()  # Track active download IDs
+        self.download_lock = asyncio.Lock()  # Lock for download tracking
     
     async def __aenter__(self):
         """Async context manager entry"""
@@ -42,8 +45,25 @@ class GofileClient:
         """Check if the token is valid and not expired."""
         if not self.token or not self.token_last_updated:
             return False
-        
+
         return datetime.now() - self.token_last_updated < timedelta(minutes=9)
+    
+    async def has_active_downloads(self):
+        """Check if there are any active downloads"""
+        async with self.download_lock:
+            return len(self.active_downloads) > 0
+    
+    async def register_download(self, download_id: str):
+        """Register a new active download"""
+        async with self.download_lock:
+            self.active_downloads.add(download_id)
+            logger.info(f"Registered download {download_id}, active downloads: {len(self.active_downloads)}")
+    
+    async def unregister_download(self, download_id: str):
+        """Unregister a completed download"""
+        async with self.download_lock:
+            self.active_downloads.discard(download_id)
+            logger.info(f"Unregistered download {download_id}, active downloads: {len(self.active_downloads)}")
     
     async def ensure_session(self):
         """Ensure session is available"""
@@ -82,6 +102,10 @@ class GofileClient:
         """Ensure the gofile token is valid, refreshing if necessary"""
         async with self.token_lock:
             if not self.is_token_valid():
+                while await self.has_active_downloads():
+                    logger.info("Waiting for active downloads to complete before refreshing token...")
+                    await asyncio.sleep(5)
+                
                 logger.info("Gofile token is invalid or expired. Refreshing token.")
                 await self.get_token()
     
@@ -90,7 +114,7 @@ class GofileClient:
         while True:
             try:
                 await self.ensure_valid_token()
-                await asyncio.sleep(5 * 60)
+                await asyncio.sleep(9 * 60)
             except asyncio.CancelledError:
                 logger.info("Gofile token refresh task cancelled.")
                 break
@@ -200,6 +224,8 @@ class GofileClient:
     
     async def stream_download(self, download_url: str, chunk_size: int = None, max_retries: int = None):
         """Stream download gofile content with resume capability"""
+        download_id = str(uuid.uuid4())
+        
         await self.ensure_session()
         await self.ensure_valid_token()
         
@@ -207,85 +233,91 @@ class GofileClient:
             logger.error("Gofile authentication failed unexpectedly before streaming.")
             raise Exception("Failed to authenticate with gofile for streaming")
         
-        chunk_size = chunk_size or settings.CHUNK_SIZE
-        max_retries = max_retries or settings.MAX_RETRIES
+        await self.register_download(download_id)
         
-        bytes_downloaded = 0
-        retry_count = 0
-        
-        while retry_count <= max_retries:
-            try:
-                headers = {
-                    "Cookie": f"accountToken={self.token}",
-                    "Accept-Encoding": "gzip, deflate, br",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "*/*",
-                    "Referer": download_url,
-                    "Origin": "https://gofile.io",
-                    "Connection": "keep-alive",
-                    "Sec-Fetch-Dest": "empty",
-                    "Sec-Fetch-Mode": "cors",
-                    "Sec-Fetch-Site": "same-site",
-                    "Pragma": "no-cache",
-                    "Cache-Control": "no-cache"
-                }
-                
-                if bytes_downloaded > 0:
-                    headers['Range'] = f'bytes={bytes_downloaded}-'
-                    logger.info(f"Resuming gofile download from byte {bytes_downloaded}")
-                
-                async with self.session.get(download_url, headers=headers) as response:
-                    if response.status not in [200, 206]:
-                        if response.status in [403, 404, 405, 500]:
-                            raise Exception(f"Gofile download failed: HTTP {response.status}")
-                        raise Exception(f"Unexpected HTTP status: {response.status}")
+        try:
+            chunk_size = chunk_size or settings.CHUNK_SIZE
+            max_retries = max_retries or settings.MAX_RETRIES
+            
+            bytes_downloaded = 0
+            retry_count = 0
+            
+            while retry_count <= max_retries:
+                try:
+                    headers = {
+                        "Cookie": f"accountToken={self.token}",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Accept": "*/*",
+                        "Referer": download_url,
+                        "Origin": "https://gofile.io",
+                        "Connection": "keep-alive",
+                        "Sec-Fetch-Dest": "empty",
+                        "Sec-Fetch-Mode": "cors",
+                        "Sec-Fetch-Site": "same-site",
+                        "Pragma": "no-cache",
+                        "Cache-Control": "no-cache"
+                    }
                     
-                    if bytes_downloaded == 0:
-                        content_length = response.headers.get('content-length')
-                        if content_length:
-                            logger.info(f"Starting gofile download: {int(content_length) / (1024*1024):.2f} MB")
-                        else:
-                            logger.info("Starting gofile download (unknown size)")
+                    if bytes_downloaded > 0:
+                        headers['Range'] = f'bytes={bytes_downloaded}-'
+                        logger.info(f"Resuming gofile download from byte {bytes_downloaded}")
                     
-                    try:
-                        async for chunk in response.content.iter_chunked(chunk_size):
-                            if chunk:
-                                bytes_downloaded += len(chunk)
-                                yield chunk
+                    async with self.session.get(download_url, headers=headers) as response:
+                        if response.status not in [200, 206]:
+                            if response.status in [403, 404, 405, 500]:
+                                raise Exception(f"Gofile download failed: HTTP {response.status}")
+                            raise Exception(f"Unexpected HTTP status: {response.status}")
                         
-                        logger.info(f"Gofile download completed: {bytes_downloaded / (1024*1024):.2f} MB")
-                        return
+                        if bytes_downloaded == 0:
+                            content_length = response.headers.get('content-length')
+                            if content_length:
+                                logger.info(f"Starting gofile download: {int(content_length) / (1024*1024):.2f} MB")
+                            else:
+                                logger.info("Starting gofile download (unknown size)")
                         
-                    except (aiohttp.ClientPayloadError, aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
-                        logger.warning(f"Gofile download interrupted at {bytes_downloaded / (1024*1024):.2f} MB: {e}")
-                        retry_count += 1
-                        
-                        if retry_count <= max_retries:
-                            logger.info(f"Will retry gofile download from byte {bytes_downloaded}")
-                            await asyncio.sleep(1)
-                            continue
-                        else:
-                            logger.error(f"Gofile download max retries ({max_retries}) exceeded")
-                            return
-                    
-                    except Exception as e:
-                        logger.error(f"Unexpected error during gofile download: {e}")
-                        retry_count += 1
-                        if retry_count <= max_retries:
-                            await asyncio.sleep(1)
-                            continue
-                        else:
+                        try:
+                            async for chunk in response.content.iter_chunked(chunk_size):
+                                if chunk:
+                                    bytes_downloaded += len(chunk)
+                                    yield chunk
+                            
+                            logger.info(f"Gofile download completed: {bytes_downloaded / (1024*1024):.2f} MB")
                             return
                             
-            except Exception as e:
-                logger.error(f"Error setting up gofile download (attempt {retry_count + 1}): {e}")
-                retry_count += 1
-                if retry_count <= max_retries:
-                    await asyncio.sleep(1)
-                    continue
-                else:
-                    from fastapi import HTTPException
-                    raise HTTPException(status_code=500, detail=f"Gofile download failed after retries: {str(e)}")
+                        except (aiohttp.ClientPayloadError, aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+                            logger.warning(f"Gofile download interrupted at {bytes_downloaded / (1024*1024):.2f} MB: {e}")
+                            retry_count += 1
+                            
+                            if retry_count <= max_retries:
+                                logger.info(f"Will retry gofile download from byte {bytes_downloaded}")
+                                await asyncio.sleep(1)
+                                continue
+                            else:
+                                logger.error(f"Gofile download max retries ({max_retries}) exceeded")
+                                return
+                        
+                        except Exception as e:
+                            logger.error(f"Unexpected error during gofile download: {e}")
+                            retry_count += 1
+                            if retry_count <= max_retries:
+                                await asyncio.sleep(1)
+                                continue
+                            else:
+                                return
+                                
+                except Exception as e:
+                    logger.error(f"Error setting up gofile download (attempt {retry_count + 1}): {e}")
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        await asyncio.sleep(1)
+                        continue
+                    else:
+                        from fastapi import HTTPException
+                        raise HTTPException(status_code=500, detail=f"Gofile download failed after retries: {str(e)}")
+            
+            logger.error("Gofile download failed after all retry attempts")
+            return
         
-        logger.error("Gofile download failed after all retry attempts")
-        return 
+        finally:
+            await self.unregister_download(download_id) 
