@@ -104,7 +104,7 @@ class GofileClient:
             if not self.is_token_valid():
                 while await self.has_active_downloads():
                     logger.info("Waiting for active downloads to complete before refreshing token...")
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(90)
                 
                 logger.info("Gofile token is invalid or expired. Refreshing token.")
                 await self.get_token()
